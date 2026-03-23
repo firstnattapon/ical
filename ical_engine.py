@@ -79,10 +79,12 @@ def parse_ical_events(ical_text):
 def sync_ical_source(source_id):
     """Sync a single iCal source: fetch, parse, and update bookings."""
     with db.get_connection() as conn:
-        source = conn.execute(
-            "SELECT s.*, r.name as room_name FROM ical_sources s JOIN rooms r ON s.room_id = r.id WHERE s.id = ?",
-            (source_id,),
-        ).fetchone()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.*, r.name as room_name FROM ical_sources s JOIN rooms r ON s.room_id = r.id WHERE s.id = %s",
+                (source_id,),
+            )
+            source = cur.fetchone()
 
     if not source:
         return {"status": "error", "message": "Source not found"}
@@ -196,9 +198,14 @@ def generate_ical_for_room(room_id):
         event = Event()
 
         uid = booking["ical_uid"] if booking["ical_uid"] else f"hana-{booking['id']}@hanahouse.local"
+        ci = booking["check_in"]
+        co = booking["check_out"]
+        ci_date = ci if isinstance(ci, date) else date.fromisoformat(ci)
+        co_date = co if isinstance(co, date) else date.fromisoformat(co)
+        
         event.add("uid", uid)
-        event.add("dtstart", date.fromisoformat(booking["check_in"]))
-        event.add("dtend", date.fromisoformat(booking["check_out"]))
+        event.add("dtstart", ci_date)
+        event.add("dtend", co_date)
         event.add("summary", f"Reserved - {booking['guest_name']}")
         event.add("description", f"Source: {booking['source']}\nRoom: {room['name']}")
         event.add("dtstamp", datetime.now())
@@ -214,20 +221,22 @@ def generate_ical_for_room(room_id):
 def detect_conflicts(room_id=None):
     """Detect booking conflicts (overlapping dates)."""
     with db.get_connection() as conn:
-        query = """
-            SELECT b1.id as booking1_id, b1.guest_name as guest1, b1.check_in as ci1, b1.check_out as co1,
-                   b2.id as booking2_id, b2.guest_name as guest2, b2.check_in as ci2, b2.check_out as co2,
-                   r.name as room_name, r.id as room_id
-            FROM bookings b1
-            JOIN bookings b2 ON b1.room_id = b2.room_id AND b1.id < b2.id
-            JOIN rooms r ON b1.room_id = r.id
-            WHERE b1.check_in < b2.check_out AND b1.check_out > b2.check_in
-              AND b1.status = 'confirmed' AND b2.status = 'confirmed'
-        """
-        params = []
-        if room_id:
-            query += " AND b1.room_id = ?"
-            params.append(room_id)
+        with conn.cursor() as cur:
+            query = """
+                SELECT b1.id as booking1_id, b1.guest_name as guest1, b1.check_in as ci1, b1.check_out as co1,
+                       b2.id as booking2_id, b2.guest_name as guest2, b2.check_in as ci2, b2.check_out as co2,
+                       r.name as room_name, r.id as room_id
+                FROM bookings b1
+                JOIN bookings b2 ON b1.room_id = b2.room_id AND b1.id < b2.id
+                JOIN rooms r ON b1.room_id = r.id
+                WHERE b1.check_in < b2.check_out AND b1.check_out > b2.check_in
+                  AND b1.status = 'confirmed' AND b2.status = 'confirmed'
+            """
+            params = []
+            if room_id:
+                query += " AND b1.room_id = %s"
+                params.append(room_id)
 
-        query += " ORDER BY r.name, b1.check_in"
-        return conn.execute(query, params).fetchall()
+            query += " ORDER BY r.name, b1.check_in"
+            cur.execute(query, tuple(params))
+            return cur.fetchall()
