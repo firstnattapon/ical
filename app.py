@@ -485,8 +485,8 @@ month_bookings = db.get_bookings(
 # Build booking lookup: date → set of room_ids
 booking_map = {}  # date_str → {room_id: booking_info}
 for b in month_bookings:
-    ci = date.fromisoformat(b["check_in"])
-    co = date.fromisoformat(b["check_out"])
+    ci = b["check_in"] if isinstance(b["check_in"], date) else date.fromisoformat(b["check_in"])
+    co = b["check_out"] if isinstance(b["check_out"], date) else date.fromisoformat(b["check_out"])
     d = max(ci, month_first)
     end = min(co, month_last + timedelta(days=1))
     while d < end:
@@ -667,7 +667,9 @@ if upcoming:
         pill = source_pill(b["source"] if b["source"] else "direct")
         ci = b["check_in"]
         co = b["check_out"]
-        nights = (date.fromisoformat(co) - date.fromisoformat(ci)).days
+        ci_date = ci if isinstance(ci, date) else date.fromisoformat(ci)
+        co_date = co if isinstance(co, date) else date.fromisoformat(co)
+        nights = (co_date - ci_date).days
         phone = (b["guest_phone"] or "") if "guest_phone" in b.keys() else ""
         phone_display = f" · 📱 {phone}" if phone else ""
 
